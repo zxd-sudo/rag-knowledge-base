@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>企业知识库问答</title>
+<style>
+  :root { --brand:#1F4E79; --bg:#f5f6f8; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; background:var(--bg); color:#222; }
+  header { background:var(--brand); color:#fff; padding:14px 20px; display:flex; align-items:center; justify-content:space-between; }
+  header h1 { font-size:18px; margin:0; }
+  header .status { font-size:12px; opacity:.85; }
+  main { max-width:860px; margin:20px auto; padding:0 16px; }
+  .card { background:#fff; border-radius:10px; padding:16px 18px; margin-bottom:16px; box-shadow:0 1px 3px rgba(0,0,0,.06); }
+  .upload-row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .upload-row input[type=file] { flex:1; min-width:200px; }
+  button { background:var(--brand); color:#fff; border:none; border-radius:6px; padding:9px 16px; cursor:pointer; font-size:14px; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  #chat { min-height:280px; max-height:52vh; overflow-y:auto; display:flex; flex-direction:column; gap:12px; }
+  .msg { max-width:82%; padding:10px 14px; border-radius:10px; line-height:1.6; white-space:pre-wrap; font-size:14px; }
+  .msg.user { align-self:flex-end; background:#e8f0fe; }
+  .msg.ai { align-self:flex-start; background:#f1f3f5; }
+  .msg.pending { opacity:.6; }
+  .src { font-size:12px; color:#666; border-top:1px dashed #ccc; margin-top:8px; padding-top:6px; max-width:82%; }
+  .src div { margin:3px 0; }
+  .input-row { display:flex; gap:10px; margin-top:10px; }
+  .input-row input { flex:1; padding:10px 12px; border:1px solid #ccc; border-radius:6px; font-size:14px; }
+  .hint { font-size:12px; color:#888; margin-top:10px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📚 企业知识库问答 Demo</h1>
+  <span class="status" id="status">加载中…</span>
+</header>
+<main>
+  <div class="card">
+    <div class="upload-row">
+      <input type="file" id="file" accept=".pdf,.txt,.md,.markdown">
+      <button id="uploadBtn">上传入库</button>
+    </div>
+    <div class="hint">支持 PDF / TXT / Markdown。上传后即可基于文档内容提问。同名文档重复上传会覆盖，不会产生重复片段。</div>
+  </div>
+
+  <div class="card">
+    <div id="chat"></div>
+    <div class="input-row">
+      <input type="text" id="question" maxlength="2000" placeholder="输入问题，例如：报销流程是什么？" />
+      <button id="sendBtn">发送</button>
+    </div>
+  </div>
+</main>
+
+<script>
+const chat = document.getElementById('chat');
+const status = document.getElementById('status');
+const qInput = document.getElementById('question');
+const fileInput = document.getElementById('file');
+const sendBtn = document.getElementById('sendBtn');
+const uploadBtn = document.getElementById('uploadBtn');
+
+/* 后端出错时不一定返回 JSON（例如 500 会返回纯文本），
+   先取文本再尝试解析，避免直接把 "Unexpected token" 抛给用户。 */
+async function readJson(resp) {
+  const text = await resp.text();
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    return { detail: text.trim().slice(0, 300) || ('HTTP ' + resp.status) };
+  }
+}
+
+/* FastAPI 的校验错误(422)里 detail 是数组，要拼成可读文本 */
+function errText(data, resp) {
+  let d = data && data.detail;
+  if (Array.isArray(d)) {
+    d = d.map(item => item.msg || JSON.stringify(item)).join('；');
+  }
+  return d || ('HTTP ' + (resp ? resp.status : '?'));
+}
+
+async function health() {
+  try {
+    const resp = await fetch('/api/health');
+    const data = await readJson(resp);
+    if (!resp.ok) throw new Error(errText(data, resp));
+    status.textContent = data.api_key_configured === false
+      ? '⚠️ 未配置 API Key（.env）'
+      : '✅ 模型已连接：' + data.llm_model;
+  } catch (e) {
+    status.textContent = '⚠️ 后端未启动：' + e.message;
+  }
+}
+
+function addMsg(text, who) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + who;
+  div.textContent = text;
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+  return div;
+}
+
+function addSources(sources) {
+  if (!sources || !sources.length) return;
+  const div = document.createElement('div');
+  div.className = 'src';
+  div.innerHTML = '<b>引用来源：</b>';   // 仅静态文本，内容一律走 textContent
+  sources.forEach((s, i) => {
+    const item = document.createElement('div');
+    item.textContent = '[' + (i + 1) + '] ' + (s.source || '') + '：' + s.content;
+    div.appendChild(item);
+  });
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+uploadBtn.addEventListener('click', async () => {
+  const file = fileInput.files[0];
+  if (!file) { alert('请先选择文件'); return; }
+
+  const fd = new FormData();
+  fd.append('file', file);
+  uploadBtn.disabled = true;
+  uploadBtn.textContent = '入库中…';
+  const tip = addMsg('⏳ 正在解析并入库，大文件需要一会儿…', 'ai');
+  tip.classList.add('pending');
+
+  try {
+    const resp = await fetch('/api/upload', { method: 'POST', body: fd });
+    const data = await readJson(resp);
+    if (!resp.ok) throw new Error(errText(data, resp));
+    tip.classList.remove('pending');
+    tip.textContent = '✅ 已上传《' + data.filename + '》，切成 ' + data.chunks + ' 个片段';
+    fileInput.value = '';   // 清空选择，避免连点造成重复上传
+  } catch (e) {
+    tip.classList.remove('pending');
+    tip.textContent = '❌ ' + e.message;
+  } finally {
+    uploadBtn.disabled = false;
+    uploadBtn.textContent = '上传入库';
+  }
+});
+
+// 同一时间只允许一个提问在飞，避免答案顺序错乱
+let pending = false;
+
+async function send() {
+  const q = qInput.value.trim();
+  if (!q || pending) return;
+
+  pending = true;
+  addMsg(q, 'user');
+  qInput.value = '';
+  sendBtn.disabled = true;
+
+  const holder = addMsg('⏳ 思考中…', 'ai');
+  holder.classList.add('pending');
+
+  try {
+    const resp = await fetch('/api/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: q })
+    });
+    const data = await readJson(resp);
+    if (!resp.ok) throw new Error(errText(data, resp));
+    holder.classList.remove('pending');
+    holder.textContent = data.answer;
+    addSources(data.sources);
+  } catch (e) {
+    holder.classList.remove('pending');
+    holder.textContent = '❌ ' + e.message;
+  } finally {
+    pending = false;
+    sendBtn.disabled = false;
+    qInput.focus();
+  }
+}
+
+sendBtn.addEventListener('click', send);
+qInput.addEventListener('keydown', (e) => {
+  // 中文输入法选词时的回车（isComposing / keyCode 229）不能当成发送
+  if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) send();
+});
+
+health();
+</script>
+</body>
+</html>
