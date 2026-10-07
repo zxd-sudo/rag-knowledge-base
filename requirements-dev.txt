@@ -1,0 +1,5 @@
+# 开发/测试依赖（CI 用这个文件安装即可，它已经包含运行依赖）
+-r requirements.txt
+
+pytest==9.1.1
+ruff==0.16.10

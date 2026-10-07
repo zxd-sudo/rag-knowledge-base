@@ -1,5 +1,8 @@
 # 📚 企业知识库问答（RAG）
 
+[![CI](https://github.com/zxd-sudo/rag-knowledge-base/actions/workflows/ci.yml/badge.svg)](https://github.com/zxd-sudo/rag-knowledge-base/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 基于 **FastAPI + LangChain + ChromaDB** 的企业知识库问答系统。上传文档后，即可基于文档内容进行自然语言问答，答案附带引用来源。
 
 一个完整的、可直接部署的 RAG 落地项目，适合作为学习参考或个人作品。
@@ -36,8 +39,13 @@ rag-knowledge-base/
 │   └── index.html     # 单页聊天界面
 ├── scripts/
 │   └── ingest.py      # 批量入库 data/ 目录
+├── tests/             # pytest 回归测试（不需要 API Key）
 ├── data/              # 示例文档
+├── .github/workflows/ # GitHub Actions CI
 ├── requirements.txt
+├── requirements-dev.txt
+├── pyproject.toml     # ruff / pytest 配置
+├── LICENSE
 └── .env.example
 ```
 
@@ -143,6 +151,24 @@ curl -X POST http://127.0.0.1:8000/api/ask \
 5. **生成** — 把检索到的上下文拼进 Prompt（用 `<资料>` 标签隔离），交给 LLM 生成带来源的回答
 
 入库是**幂等**的：同一份文档重复上传/重复执行 `ingest.py` 不会产生重复片段。
+
+## 🧪 测试
+
+```bash
+pip install -r requirements-dev.txt
+pytest          # 运行测试
+ruff check .    # 代码风格检查
+```
+
+测试用假的 embedding 和假的大模型顶替真实模型，**不需要 API Key、也不会联网**，所以可以直接在 CI 里跑；
+向量库一律指向临时目录，不会动到你本地的 `chroma_db`。以上两项都在 GitHub Actions 中自动执行。
+
+覆盖的关键行为：入库幂等与来源覆盖、文档类型白名单、编码识别（GBK/BOM）、加密与损坏 PDF、
+上传出错返回友好 JSON、提问长度限制、Prompt 注入防护。
+
+## 📄 License
+
+[MIT](LICENSE)
 
 ## 🔜 后续计划
 

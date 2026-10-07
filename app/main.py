@@ -2,6 +2,7 @@
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Annotated
 
 import openai
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -55,7 +56,7 @@ def health():
 
 
 @app.post("/api/upload")
-def upload(file: UploadFile = File(...)):
+def upload(file: Annotated[UploadFile, File()]):
     """同步端点：FastAPI 会自动放进线程池，不会阻塞事件循环。"""
     limit = config.MAX_UPLOAD_MB * 1024 * 1024
     name = file.filename or ""
